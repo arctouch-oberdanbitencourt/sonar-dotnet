@@ -165,9 +165,6 @@ namespace SonarAnalyzer.SymbolicExecution
             var newProgramPoint = new ProgramPoint(node.ProgramPoint.Block, node.ProgramPoint.Offset + 1);
             var newProgramState = node.ProgramState;
 
-            //FIXME: REMOVE DEBUG
-            System.Diagnostics.Debug.WriteLine(instruction.GetType().Name + ": " + instruction.ToString());
-
             newProgramState = InvokeChecks(newProgramState, (ps, check) => check.PreProcessInstruction(node.ProgramPoint, ps));
             if (newProgramState == null)
             {
@@ -641,16 +638,10 @@ namespace SonarAnalyzer.SymbolicExecution
         {
             var ps = programState.PopValue(out var sv);
 
-            //FIXME: REMOVE DEBUG
-            System.Diagnostics.Debug.WriteLine("Set&Enqueue Positive constraint");
-
             foreach (var newProgramState in sv.TrySetConstraint(ObjectConstraint.Null, ps))
             {
                 EnqueueNewNode(new ProgramPoint(binaryBranchBlock.TrueSuccessorBlock), newProgramState);
             }
-
-            //FIXME: REMOVE DEBUG
-            System.Diagnostics.Debug.WriteLine("Set&Enqueue Opposite constraint");
 
             foreach (var newProgramState in sv.TrySetOppositeConstraint(ObjectConstraint.Null, ps))
             {
