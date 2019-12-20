@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SonarAnalyzer for .NET
  * Copyright (C) 2015-2019 SonarSource SA
  * mailto: contact AT sonarsource DOT com
@@ -266,6 +266,9 @@ namespace SonarAnalyzer.SymbolicExecution
 
         public ProgramState PushValue(SymbolicValue symbolicValue)
         {
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        Push: " + symbolicValue.ToString() + ", constraints: "+Constraints.Where(x => !InitialConstraints.ContainsKey(x.Key)).JoinStr(", ", x=> x.ToString()));
+
             return new ProgramState(
                 Values,
                 Constraints,
@@ -280,6 +283,9 @@ namespace SonarAnalyzer.SymbolicExecution
             {
                 return this;
             }
+
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        PushValues: " + values.JoinStr(", ", x => x.ToString()) + ", constraints: " + Constraints.Where(x => !InitialConstraints.ContainsKey(x.Key)).JoinStr(", ", x => x.ToString()));
 
             return new ProgramState(
                 Values,
@@ -296,12 +302,17 @@ namespace SonarAnalyzer.SymbolicExecution
 
         public ProgramState PopValue(out SymbolicValue poppedValue)
         {
-            return new ProgramState(
+            //FIXME: REMOVE DEBUG, restore return
+
+            var ret= new ProgramState(
                 Values,
                 Constraints,
                 ProgramPointVisitCounts,
                 ExpressionStack.Pop(out poppedValue),
                 Relationships);
+
+                System.Diagnostics.Debug.WriteLine("        Pop: " + poppedValue.ToString() + ", constraints: " + Constraints.Where(x=>!InitialConstraints.ContainsKey(x.Key)).JoinStr(", ", x => x.ToString()));
+                return ret;
         }
 
         public ProgramState PopValues(int numberOfValuesToPop)
@@ -313,6 +324,9 @@ namespace SonarAnalyzer.SymbolicExecution
 
             var newStack = ImmutableStack.CreateRange(
                 ExpressionStack.Skip(numberOfValuesToPop).Reverse());
+
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        PopValues("+numberOfValuesToPop+"): " + ExpressionStack.Take(numberOfValuesToPop).JoinStr(", ", x=>x.ToString()) + ", constraints: " + Constraints.Where(x => !InitialConstraints.ContainsKey(x.Key)).JoinStr(", ", x => x.ToString()));
 
             return new ProgramState(
                 Values,
@@ -336,6 +350,9 @@ namespace SonarAnalyzer.SymbolicExecution
 
         internal ProgramState StoreSymbolicValue(ISymbol symbol, SymbolicValue newSymbolicValue)
         {
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        StoreSymbolicValue: " + symbol.Name + "=" + newSymbolicValue.ToString());
+
             return new ProgramState(
                 Values.SetItem(symbol, newSymbolicValue),
                 Constraints,
@@ -460,6 +477,9 @@ namespace SonarAnalyzer.SymbolicExecution
                     constraint.OppositeForLogicalNot, this);
             }
 
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        SetConstraint: " + symbolicValue +"=" + constraint.ToString());
+
             return new ProgramState(
                 Values,
                 updatedConstraintsMap,
@@ -477,6 +497,9 @@ namespace SonarAnalyzer.SymbolicExecution
 
             var updatedConstraintsMap = Constraints.RemoveConstraintForSymbolicValue(symbolicValue, constraint);
 
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("        RemoveConstraint: " + symbolicValue + "=" + constraint.ToString());
+
             return new ProgramState(
                 Values,
                 updatedConstraintsMap,
@@ -489,6 +512,14 @@ namespace SonarAnalyzer.SymbolicExecution
         {
             return Constraints.TryGetValue(symbolicValue, out var constraints) &&
                    constraints.HasConstraint(constraint);
+        }
+
+        public override string ToString()
+        {
+            return "Values: " + Values.JoinStr(", ", x => x.Key.Name + "=" + x.Value.ToString())
+                + "; Constraints: " + Constraints.Where(x => !InitialConstraints.ContainsKey(x.Key)).JoinStr(", ", x => x.ToString())
+                + "; Stack: " + ExpressionStack.JoinStr(", ", x => x.ToString())
+                ;
         }
     }
 }

@@ -23,12 +23,17 @@ namespace Tests.Diagnostics
             o.ToString(); // Noncompliant
         }
 
+        protected internal void NotCompliantCases_ProtectedInternal(object o)
+        {
+            o.ToString(); // Noncompliant
+        }
+
         private void CompliantCases_Private(object o)
         {
             o.ToString(); // Compliant, not public
         }
 
-        private void CompliantCases_Internal(object o)
+        internal void CompliantCases_Internal(object o)
         {
             o.ToString(); // Compliant, not public
         }
@@ -86,6 +91,47 @@ namespace Tests.Diagnostics
             {
                 s2.ToString(); // Compliant
             }
+        }
+
+        public void CSharp8_CompliantCases(string s1)
+        {
+            s1 ??= "N/A";
+            s1.ToString();      // Compliant
+        }
+
+        public void CSharp8_LocalStaticFunctions(object arg)
+        {
+            static string Aaa(object o)
+            {
+                return o.ToString();   //Noncompliant
+            }
+            static string Bbb(object o) => o.ToString();    //Noncompliant
+            static string Ccc(object o) => (o ?? new object()).ToString();
+            static string Ddd(string o)
+            {
+                o ??= "N/A";
+                return o.ToString();
+            }
+
+            Aaa(arg);    // Compliant, we care about dereference only
+            Bbb(arg);
+            Ccc(arg);
+            Ddd(null);
+        }
+
+        public void CSharp8_SwitchExpressions(string s, bool b)
+        {
+            (b switch
+            {
+                true => s,
+                false => "N/A"
+            }).ToString();      //Noncompliant
+
+            (b switch
+            {
+                true => s == null ? "Empty" : s,
+                false => "N/A"
+            }).ToString();
         }
 
         public Program(int i) { }
@@ -307,6 +353,18 @@ namespace Tests.Diagnostics
                 // do stuff
             }
             return equals;
+        }
+    }
+
+    public interface IWithDefaultImplementation
+    {
+        decimal Count { get; set; }
+        decimal Price { get; set; }
+
+        //Default interface methods
+        void Reset(string s)
+        {
+            s.ToString();   //Noncompliant
         }
     }
 }

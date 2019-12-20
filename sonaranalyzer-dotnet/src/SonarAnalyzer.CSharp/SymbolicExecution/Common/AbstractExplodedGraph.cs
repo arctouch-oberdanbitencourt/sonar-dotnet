@@ -81,6 +81,13 @@ namespace SonarAnalyzer.SymbolicExecution
         {
             var steps = 0;
 
+            //FIXME: REMOVE DEBUG
+            Block prev=null;
+            var ids = new BlockIdProvider();
+            System.Diagnostics.Debug.WriteLine("---CFG---");
+            System.Diagnostics.Debug.WriteLine(ControlFlowGraph.CSharp.CfgSerializer.Serialize(this.declaration.Name, this.cfg));
+            System.Diagnostics.Debug.WriteLine("---Start Walk---");
+
             EnqueueStartNode();
 
             while (this.workList.Any())
@@ -99,9 +106,23 @@ namespace SonarAnalyzer.SymbolicExecution
 
                 if (programPoint.Block is ExitBlock)
                 {
+                    //FIXME: REMOVE DEBUG
+                    System.Diagnostics.Debug.WriteLine("---ExitBlock");
+
                     OnExitBlockReached();
                     continue;
                 }
+
+                //FIXME: REMOVE DEBUG
+                if (prev != programPoint.Block)
+                {
+                    prev = programPoint.Block;
+                    System.Diagnostics.Debug.WriteLine("");
+                    System.Diagnostics.Debug.WriteLine("---Start: " + programPoint.Block.GetType().Name +" "+ids.Get(programPoint.Block)+ ": " + string.Join("; ", programPoint.Block.Instructions.Select(x => x.ToString())));
+                }
+                //FIXME: REMOVE DEBUG
+                System.Diagnostics.Debug.WriteLine("");
+                System.Diagnostics.Debug.WriteLine("Node State: " + node.ProgramState.ToString());
 
                 try
                 {
@@ -110,6 +131,11 @@ namespace SonarAnalyzer.SymbolicExecution
                         VisitInstruction(node);
                         continue;
                     }
+
+                    //FIXME: REMOVE DEBUG
+                    System.Diagnostics.Debug.WriteLine("---Finishing: "+programPoint.Block.GetType().Name+ " " + ids.Get(programPoint.Block) + ": " +string.Join("; ", programPoint.Block.Instructions.Select(x => x.ToString())));
+                    System.Diagnostics.Debug.WriteLine("");
+
 
                     if (programPoint.Block is BinaryBranchBlock binaryBranchBlock)
                     {
@@ -144,6 +170,8 @@ namespace SonarAnalyzer.SymbolicExecution
             }
 
             OnExplorationEnded();
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("---End Walk---");
         }
 
         internal void AddExplodedGraphCheck<T>(T check)

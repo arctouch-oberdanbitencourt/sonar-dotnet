@@ -117,6 +117,7 @@ namespace SonarAnalyzer.SymbolicExecution
                     return;
 
                 case SyntaxKind.CoalesceExpression:
+                case SyntaxKindEx.CoalesceAssignmentExpression:
                     VisitCoalesceExpressionBinaryBranch(binaryBranchBlock, newProgramState);
                     return;
 
@@ -140,9 +141,14 @@ namespace SonarAnalyzer.SymbolicExecution
                 case SyntaxKind.CatchFilterClause:
                     VisitBinaryBranch(binaryBranchBlock, node, ((CatchFilterClauseSyntax)binaryBranchBlock.BranchingNode).FilterExpression);
                     return;
+
                 // this is only for switch cases without a when. We handle C#7 switch case as a default BinaryBranch
                 case SyntaxKind.CaseSwitchLabel when !CasePatternSwitchLabelSyntaxWrapper.IsInstance(binaryBranchBlock.BranchingNode):
                     VisitCaseSwitchBinaryBranchBlock(binaryBranchBlock, node, (CaseSwitchLabelSyntax)binaryBranchBlock.BranchingNode);
+                    return;
+
+                case SyntaxKindEx.SwitchExpressionArm:
+                    VisitSwitchExpressionBinaryBranch(binaryBranchBlock, node, (SwitchExpressionArmSyntaxWrapper)binaryBranchBlock.BranchingNode);
                     return;
 
                 default:
@@ -159,6 +165,9 @@ namespace SonarAnalyzer.SymbolicExecution
             var newProgramPoint = new ProgramPoint(node.ProgramPoint.Block, node.ProgramPoint.Offset + 1);
             var newProgramState = node.ProgramState;
 
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine(instruction.GetType().Name + ": " + instruction.ToString());
+
             newProgramState = InvokeChecks(newProgramState, (ps, check) => check.PreProcessInstruction(node.ProgramPoint, ps));
             if (newProgramState == null)
             {
@@ -171,6 +180,9 @@ namespace SonarAnalyzer.SymbolicExecution
                     newProgramState = VisitVariableDeclarator((VariableDeclaratorSyntax)instruction, newProgramState);
                     break;
 
+                //Due to Coalesce Assignment CFG, there's either LEFT or RIGHT value on top of the stack.
+                //Therefore it's like an assignment here for current CFG branch.
+                case SyntaxKindEx.CoalesceAssignmentExpression:
                 case SyntaxKind.SimpleAssignmentExpression:
                     newProgramState = VisitSimpleAssignment((AssignmentExpressionSyntax)instruction, newProgramState);
                     break;
@@ -192,7 +204,6 @@ namespace SonarAnalyzer.SymbolicExecution
                 case SyntaxKind.DivideAssignmentExpression:
                 case SyntaxKind.MultiplyAssignmentExpression:
                 case SyntaxKind.ModuloAssignmentExpression:
-
                 case SyntaxKind.LeftShiftAssignmentExpression:
                 case SyntaxKind.RightShiftAssignmentExpression:
                     newProgramState = VisitOpAssignment((AssignmentExpressionSyntax)instruction, newProgramState);
@@ -524,6 +535,10 @@ namespace SonarAnalyzer.SymbolicExecution
                     // Do nothing
                     break;
 
+                case SyntaxKindEx.DiscardPattern:
+                    // _ in switch expressions, equivalent of default:
+                    break;
+
                 default:
                     throw new NotSupportedException($"{instruction.Kind()}");
             }
@@ -626,16 +641,23 @@ namespace SonarAnalyzer.SymbolicExecution
         {
             var ps = programState.PopValue(out var sv);
 
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("Set&Enqueue Positive constraint");
+
             foreach (var newProgramState in sv.TrySetConstraint(ObjectConstraint.Null, ps))
             {
                 EnqueueNewNode(new ProgramPoint(binaryBranchBlock.TrueSuccessorBlock), newProgramState);
             }
 
+            //FIXME: REMOVE DEBUG
+            System.Diagnostics.Debug.WriteLine("Set&Enqueue Opposite constraint");
+
             foreach (var newProgramState in sv.TrySetOppositeConstraint(ObjectConstraint.Null, ps))
             {
                 var nps = newProgramState;
 
-                if (!ShouldConsumeValue((BinaryExpressionSyntax)binaryBranchBlock.BranchingNode))
+                if (!ShouldConsumeValue((ExpressionSyntax)binaryBranchBlock.BranchingNode)
+                    || binaryBranchBlock.BranchingNode?.Kind() == SyntaxKindEx.CoalesceAssignmentExpression)
                 {
                     nps = nps.PushValue(sv);
                 }
@@ -645,7 +667,7 @@ namespace SonarAnalyzer.SymbolicExecution
 
         private void VisitConditionalAccessBinaryBranch(BinaryBranchBlock binaryBranchBlock, ProgramState programState)
         {
-            if(!programState.HasValue)
+            if (!programState.HasValue)
             {
                 return;
             }
@@ -668,12 +690,11 @@ namespace SonarAnalyzer.SymbolicExecution
             }
         }
 
-        private void VisitCaseSwitchBinaryBranchBlock(BinaryBranchBlock branchBlock, ExplodedGraphNode node, CaseSwitchLabelSyntax simpleCaseLabel)
+        private void VisitSwitchBinaryBranch(BinaryBranchBlock branchBlock, ProgramState programState, ExplodedGraphNode node, SyntaxNode labelNode)
         {
-            var programState = CleanStateAfterBlock(node.ProgramState, node.ProgramPoint.Block);
             var ps = programState.PopValue(out var sv);
 
-            if (simpleCaseLabel.Value.IsNullLiteral())
+            if (labelNode.IsNullLiteral())
             {
                 foreach (var newProgramState in sv.TrySetConstraint(ObjectConstraint.Null, ps))
                 {
@@ -693,6 +714,16 @@ namespace SonarAnalyzer.SymbolicExecution
                 // False succesor is the next case block. It is always enqueued without constraint
                 EnqueueNewNode(new ProgramPoint(branchBlock.FalseSuccessorBlock), ps);
             }
+        }
+        private void VisitCaseSwitchBinaryBranchBlock(BinaryBranchBlock branchBlock, ExplodedGraphNode node, CaseSwitchLabelSyntax simpleCaseLabel)
+        {
+            var programState = CleanStateAfterBlock(node.ProgramState, node.ProgramPoint.Block);
+            VisitSwitchBinaryBranch(branchBlock, programState, node, simpleCaseLabel.Value);
+        }
+
+        private void VisitSwitchExpressionBinaryBranch(BinaryBranchBlock branchBlock, ExplodedGraphNode node, SwitchExpressionArmSyntaxWrapper switchArm)
+        {
+            VisitSwitchBinaryBranch(branchBlock, node.ProgramState, node, switchArm.Pattern.SyntaxNode);
         }
 
         private void VisitBinaryBranch(BinaryBranchBlock binaryBranchBlock, ExplodedGraphNode node, SyntaxNode instruction)
@@ -722,18 +753,18 @@ namespace SonarAnalyzer.SymbolicExecution
             {
                 OnConditionEvaluated(instruction, evaluationValue: true);
                 // this inner loop is to give the possibility of handling the same block with different constraints/programstate.
-                foreach (var innerNewProgramState  in GenerateNewProgramTrueState(binaryBranchBlock, sv, newProgramState))
+                foreach (var innerNewProgramState in GenerateNewProgramTrueState(binaryBranchBlock, sv, newProgramState))
                 {
-                    EnqueueNewNode(new ProgramPoint(binaryBranchBlock.TrueSuccessorBlock), CleanStateAfterBlock(innerNewProgramState , node.ProgramPoint.Block));
+                    EnqueueNewNode(new ProgramPoint(binaryBranchBlock.TrueSuccessorBlock), CleanStateAfterBlock(innerNewProgramState, node.ProgramPoint.Block));
                 }
             }
 
             foreach (var newProgramState in sv.TrySetOppositeConstraint(BoolConstraint.True, ps))
             {
                 OnConditionEvaluated(instruction, evaluationValue: false);
-                foreach (var innerNewProgramState  in GenerateNewProgramFalseState(binaryBranchBlock, sv, newProgramState))
+                foreach (var innerNewProgramState in GenerateNewProgramFalseState(binaryBranchBlock, sv, newProgramState))
                 {
-                    EnqueueNewNode(new ProgramPoint(binaryBranchBlock.FalseSuccessorBlock), CleanStateAfterBlock(innerNewProgramState , node.ProgramPoint.Block));
+                    EnqueueNewNode(new ProgramPoint(binaryBranchBlock.FalseSuccessorBlock), CleanStateAfterBlock(innerNewProgramState, node.ProgramPoint.Block));
                 }
             }
         }
@@ -1026,7 +1057,7 @@ namespace SonarAnalyzer.SymbolicExecution
             }
 
             // Taking a an argument by ref will remove its constraint.
-            if(argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword))
+            if (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword))
             {
                 newProgramState = newProgramState.RemoveConstraint(sv);
             }
@@ -1155,8 +1186,8 @@ namespace SonarAnalyzer.SymbolicExecution
                 return ShouldConsumeValue(conditionalAccess.GetSelfOrTopParenthesizedExpression());
             }
 
-            return parent is ExpressionStatementSyntax ||
-                parent is YieldStatementSyntax;
+            return parent is ExpressionStatementSyntax
+                || parent is YieldStatementSyntax;
         }
 
         private static bool IsEmptyNullableCtorCall(IMethodSymbol nullableConstructorCall)

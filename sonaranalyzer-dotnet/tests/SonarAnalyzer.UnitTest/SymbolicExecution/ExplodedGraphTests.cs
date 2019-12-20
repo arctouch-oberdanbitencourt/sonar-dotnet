@@ -30,6 +30,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SonarAnalyzer.ControlFlowGraph;
 using SonarAnalyzer.ControlFlowGraph.CSharp;
+using SonarAnalyzer.LiveVariableAnalysis;
 using SonarAnalyzer.SymbolicExecution;
 using SonarAnalyzer.SymbolicExecution.Constraints;
 using SonarAnalyzer.UnitTest.Helpers;
@@ -45,7 +46,7 @@ namespace NS
   public class Foo
   {{
     private bool Property {{ get; set; }}
-    public void Bar(bool inParameter, out bool outParameter)
+    public void Main(bool inParameter, out bool outParameter)
     {{
       {0}
     }}
@@ -57,24 +58,12 @@ namespace NS
         public void ExplodedGraph_SequentialInput()
         {
             var testInput = "var a = true; var b = false; b = !b; a = (b);";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-            var bSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
+            var bSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
             var numberOfProcessedInstructions = 0;
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -98,11 +87,9 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
             numberOfProcessedInstructions.Should().Be(9);
-            numberOfExitBlockReached.Should().Be(1);
         }
 
         [TestMethod]
@@ -110,23 +97,11 @@ namespace NS
         public void ExplodedGraph_SequentialInput_OutParameter()
         {
             var testInput = "outParameter = true;";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var parameters = method.DescendantNodes().OfType<ParameterSyntax>();
-            var outParameterSymbol = semanticModel.GetDeclaredSymbol(parameters.First(d => d.Identifier.ToString() == "outParameter"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var parameters = context.MainMethod.DescendantNodes().OfType<ParameterSyntax>();
+            var outParameterSymbol = context.SemanticModel.GetDeclaredSymbol(parameters.First(d => d.Identifier.ToString() == "outParameter"));
             var numberOfProcessedInstructions = 0;
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -137,11 +112,9 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
             numberOfProcessedInstructions.Should().Be(2);
-            numberOfExitBlockReached.Should().Be(1);
         }
 
         [TestMethod]
@@ -154,26 +127,16 @@ namespace NS
                 inputBuilder.AppendLine($"var x{i} = true;");
             }
             var testInput = inputBuilder.ToString();
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-            var maxStepCountReached = false;
-            explodedGraph.MaxStepCountReached += (sender, args) => { maxStepCountReached = true; };
+            var context = new ExplodedGraphContext(testInput);
 
             var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
+            context.EG.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
 
-            explodedGraph.Walk();
+            context.EG.Walk();  // Special case with manual checks
 
-            explorationEnded.Should().BeFalse();
-            maxStepCountReached.Should().BeTrue();
-            numberOfExitBlockReached.Should().Be(0);
+            context.ExplorationEnded.Should().Be(false);
+            context.NumberOfExitBlockReached.Should().Be(0);
+            context.MaxStepCountReached.Should().Be(true);
         }
 
         [TestMethod]
@@ -181,26 +144,15 @@ namespace NS
         public void ExplodedGraph_SingleBranchVisited_If()
         {
             var testInput = "var a = false; bool b; if (a) { b = true; } else { b = false; } a = b;";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-            var bSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
+            var bSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
             var numberOfLastInstructionVisits = 0;
             var numberOfProcessedInstructions = 0;
-
-            explodedGraph.InstructionProcessed +=
+            var numberOfExitBlockReached = 0;
+            context.EG.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -224,9 +176,8 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
             numberOfProcessedInstructions.Should().Be(8);
             numberOfExitBlockReached.Should().Be(1);
             numberOfLastInstructionVisits.Should().Be(1);
@@ -237,24 +188,11 @@ namespace NS
         public void ExplodedGraph_SingleBranchVisited_And()
         {
             var testInput = "var a = false; if (a && !a) { a = true; }";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
             var numberOfProcessedInstructions = 0;
-
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -268,10 +206,7 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
-
-            explorationEnded.Should().BeTrue();
-            numberOfExitBlockReached.Should().Be(1);
+            context.Walk(); // Only EG final status check
         }
 
         [TestMethod]
@@ -279,33 +214,17 @@ namespace NS
         public void ExplodedGraph_BothBranchesVisited()
         {
             var testInput = "var a = false; bool b; if (inParameter) { b = inParameter; } else { b = !inParameter; } a = b;";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-            var bSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
-
-            var parameters = method.DescendantNodes().OfType<ParameterSyntax>();
-            var inParameterSymbol = semanticModel.GetDeclaredSymbol(parameters.First(d => d.Identifier.ToString() == "inParameter"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
+            var bSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
+            var parameters = context.MainMethod.DescendantNodes().OfType<ParameterSyntax>();
+            var inParameterSymbol = context.SemanticModel.GetDeclaredSymbol(parameters.First(d => d.Identifier.ToString() == "inParameter"));
             var numberOfLastInstructionVisits = 0;
             var numberOfProcessedInstructions = 0;
-
             var visitedBlocks = new HashSet<Block>();
             var branchesVisited = 0;
-
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     visitedBlocks.Add(args.ProgramPoint.Block);
@@ -344,16 +263,14 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            // Number of Exit blocks:
+            // All variables are dead at the ExitBlock, so whenever we get there,
+            // the ExplodedGraph nodes should be the same, and thus should be processed only once.
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
             branchesVisited.Should().Be(4 + 1);
-            numberOfExitBlockReached.Should().Be(1,
-                "All variables are dead at the ExitBlock, so whenever we get there, the ExplodedGraph nodes should be the same, " +
-                "and thus should be processed only once.");
             numberOfLastInstructionVisits.Should().Be(2);
-
-            visitedBlocks.Should().HaveCount(cfg.Blocks.Count() - 1 /* Exit block*/);
+            visitedBlocks.Should().HaveCount(context.CFG.Blocks.Count() - 1 /* Exit block*/);
         }
 
         [TestMethod]
@@ -361,26 +278,12 @@ namespace NS
         public void ExplodedGraph_BothBranchesVisited_StateMerge()
         {
             var testInput = "var a = !true; bool b; if (inParameter) { b = false; } else { b = false; } a = b;";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
             var numberOfLastInstructionVisits = 0;
             var numberOfProcessedInstructions = 0;
-
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -391,10 +294,8 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
-            numberOfExitBlockReached.Should().Be(1);
             numberOfLastInstructionVisits.Should().Be(1);
         }
 
@@ -403,31 +304,19 @@ namespace NS
         public void ExplodedGraph_BothBranchesVisited_NonCondition()
         {
             var testInput = "var str = this?.ToString();";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var countConditionEvaluated = 0;
-            explodedGraph.ConditionEvaluated += (sender, args) => { countConditionEvaluated++; };
-
+            var context = new ExplodedGraphContext(testInput);
             var visitedBlocks = new HashSet<Block>();
-
-            explodedGraph.InstructionProcessed +=
+            var countConditionEvaluated = 0;
+            context.EG.ConditionEvaluated += (sender, args) => { countConditionEvaluated++; };
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     visitedBlocks.Add(args.ProgramPoint.Block);
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
-            visitedBlocks.Should().HaveCount(cfg.Blocks.Count() - 1 /* Exit block */);
+            visitedBlocks.Should().HaveCount(context.CFG.Blocks.Count() - 1 /* Exit block */);
             countConditionEvaluated.Should().Be(0);
         }
 
@@ -436,24 +325,11 @@ namespace NS
         public void ExplodedGraph_AllBranchesVisited()
         {
             var testInput = "int i = 1; switch (i) { case 1: default: cw1(); break; case 2: cw2(); break; }";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
             var numberOfCw1InstructionVisits = 0;
             var numberOfCw2InstructionVisits = 0;
             var numberOfProcessedInstructions = 0;
-
-            explodedGraph.InstructionProcessed +=
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -467,10 +343,8 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
-            explorationEnded.Should().BeTrue();
-            numberOfExitBlockReached.Should().Be(1);
             numberOfCw1InstructionVisits.Should().Be(2);
             numberOfCw2InstructionVisits.Should().Be(1);
         }
@@ -480,22 +354,14 @@ namespace NS
         public void ExplodedGraph_NonDecisionMakingAssignments()
         {
             var testInput = "var a = true; a |= false; var b = 42; b++; ++b;";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var varDeclarators = method.DescendantNodes().OfType<VariableDeclaratorSyntax>();
-            var aSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
-            var bSymbol = semanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-
-            SymbolicValue sv = null;
+            var context = new ExplodedGraphContext(testInput);
+            var varDeclarators = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>();
+            var aSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "a"));
+            var bSymbol = context.SemanticModel.GetDeclaredSymbol(varDeclarators.First(d => d.Identifier.ToString() == "b"));
             var numberOfProcessedInstructions = 0;
             var branchesVisited = 0;
-
-            explodedGraph.InstructionProcessed +=
+            SymbolicValue sv = null;
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -533,7 +399,7 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
+            context.Walk();
 
             numberOfProcessedInstructions.Should().Be(11);
             branchesVisited.Should().Be(5);
@@ -544,26 +410,12 @@ namespace NS
         public void ExplodedGraph_NonLocalNorFieldSymbolBranching()
         {
             var testInput = "if (Property) { cw(); }";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-            var propertySymbol = semanticModel.GetSymbolInfo(
-                method.DescendantNodes().OfType<IdentifierNameSyntax>().First(d => d.Identifier.ToString() == "Property")).Symbol;
-
-            propertySymbol.Should().NotBeNull();
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
-            var numberOfExitBlockReached = 0;
-            explodedGraph.ExitBlockReached += (sender, args) => { numberOfExitBlockReached++; };
-
+            var context = new ExplodedGraphContext(testInput);
             var numberOfProcessedInstructions = 0;
-
-            explodedGraph.InstructionProcessed +=
+            var propertySymbol = context.SemanticModel.GetSymbolInfo(context.MainMethod.DescendantNodes()
+                .OfType<IdentifierNameSyntax>().First(d => d.Identifier.ToString() == "Property")).Symbol;
+            propertySymbol.Should().NotBeNull();
+            context.EG.InstructionProcessed +=
                 (sender, args) =>
                 {
                     numberOfProcessedInstructions++;
@@ -573,10 +425,7 @@ namespace NS
                     }
                 };
 
-            explodedGraph.Walk();
-
-            explorationEnded.Should().BeTrue();
-            numberOfExitBlockReached.Should().Be(1);
+            context.Walk();     // Only EG final status check
         }
 
         [TestMethod]
@@ -584,26 +433,16 @@ namespace NS
         public void ExplodedGraph_LoopExploration()
         {
             var testInput = "var i = 0; while (i < 1) { i = i + 1; }";
-            var method = ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, testInput), "Bar", out var semanticModel);
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-
+            var context = new ExplodedGraphContext(testInput);
             var exceeded = 0;
-            explodedGraph.ProgramPointVisitCountExceedLimit += (sender, args) =>
+            context.EG.ProgramPointVisitCountExceedLimit += (sender, args) =>
             {
                 exceeded++;
                 args.ProgramPoint.Block.Instructions.Should().Contain(i => i.ToString() == "i < 1");
             };
 
-            explodedGraph.Walk();
+            context.EG.Walk();
 
-            explorationEnded.Should().BeTrue();
             exceeded.Should().Be(1);
         }
 
@@ -611,7 +450,7 @@ namespace NS
         [TestCategory("Symbolic execution")]
         public void ExplodedGraph_InternalStateCount_MaxReached()
         {
-            if (TestContextHelper.IsAzureDevOpsContext) // FIX ME: test throws OOM on Azure DevOps
+            if (TestContextHelper.IsAzureDevOpsContext) // ToDo: test throws OutOfMemory on Azure DevOps
             {
                 return;
             }
@@ -654,26 +493,153 @@ namespace TesteAnalyzer
     }
 }
 ";
-            var (tree, semanticModel) = TestHelper.Compile(testInput);
-            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().First(m => m.Identifier.ValueText == "Main");
-            var methodSymbol = semanticModel.GetDeclaredSymbol(method);
-
-            var cfg = CSharpControlFlowGraph.Create(method.Body, semanticModel);
-            var lva = CSharpLiveVariableAnalysis.Analyze(cfg, methodSymbol, semanticModel);
-
-            var explodedGraph = new CSharpExplodedGraph(cfg, methodSymbol, semanticModel, lva);
-            var explorationEnded = false;
-            explodedGraph.ExplorationEnded += (sender, args) => { explorationEnded = true; };
-            var maxStepCountReached = false;
-            explodedGraph.MaxStepCountReached += (sender, args) => { maxStepCountReached = true; };
+            var context = new ExplodedGraphContext(TestHelper.Compile(testInput));
             var maxInternalStateCountReached = false;
-            explodedGraph.MaxInternalStateCountReached += (sender, args) => { maxInternalStateCountReached = true; };
+            context.EG.MaxInternalStateCountReached += (sender, args) => { maxInternalStateCountReached = true; };
 
-            explodedGraph.Walk();
+            context.EG.Walk();  // Special case, walk and check everythink manually
 
-            explorationEnded.Should().BeFalse();
-            maxStepCountReached.Should().BeFalse();
             maxInternalStateCountReached.Should().BeTrue();
+            context.NumberOfExitBlockReached.Should().Be(0);
+            context.ExplorationEnded.Should().BeFalse();
+            context.MaxStepCountReached.Should().BeFalse();
         }
+
+        [TestMethod]
+        [TestCategory("Symbolic execution")]
+        public void ExplodedGraph_CoalesceAssignment()
+        {
+            var testInput = @"string s = null; s ??= ""Empty""; s.ToString();";
+            var context = new ExplodedGraphContext(testInput);
+            var sSyntax = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>().Single(d => d.Identifier.ToString() == "s");
+            var sSymbol = context.SemanticModel.GetDeclaredSymbol(sSyntax);
+            var numberOfValidatedInstructions = 0;
+            context.EG.InstructionProcessed += (sender, args) =>
+                {
+                    if(args.Instruction.ToString() == "s.ToString()")
+                    {
+                        numberOfValidatedInstructions++;
+                        args.ProgramState.HasConstraint(args.ProgramState.GetSymbolValue(sSymbol), ObjectConstraint.NotNull).Should().BeTrue();
+                    }
+                };
+
+            context.Walk();
+
+            numberOfValidatedInstructions.Should().Be(1);
+        }
+
+        [TestMethod]
+        [TestCategory("Symbolic execution")]
+        public void ExplodedGraph_SwitchExpression_SimpleExpression()
+        {
+            var testInput = @"string s = null; s = (s == null) switch { true => ""Value"", _ => s}; s.ToString();";
+            var context = new ExplodedGraphContext(testInput);
+            var sSyntax = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>().Single(d => d.Identifier.ToString() == "s");
+            var sSymbol = context.SemanticModel.GetDeclaredSymbol(sSyntax);
+            var numberOfValidatedInstructions = 0;
+            context.EG.InstructionProcessed += (sender, args) =>
+            {
+                if (args.Instruction.ToString() == "s.ToString()")
+                {
+                    numberOfValidatedInstructions++;
+                    args.ProgramState.HasConstraint(args.ProgramState.GetSymbolValue(sSymbol), ObjectConstraint.NotNull).Should().BeTrue();
+                }
+            };
+
+            context.Walk();
+
+            numberOfValidatedInstructions.Should().Be(1);
+        }
+
+        [TestMethod]
+        [TestCategory("Symbolic execution")]
+        public void ExplodedGraph_SwitchStatement()
+        {
+            var testInput = @"string s=null; switch(s==null) {case true: s=""Value""; break; default : break;}; s.ToString();";
+            var context = new ExplodedGraphContext(testInput);
+            var sSyntax = context.MainMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>().Single(d => d.Identifier.ToString() == "s");
+            var sSymbol = context.SemanticModel.GetDeclaredSymbol(sSyntax);
+            var numberOfValidatedInstructions = 0;
+            context.EG.InstructionProcessed += (sender, args) =>
+            {
+                if (args.Instruction.ToString() == "s.ToString()")
+                {
+                    numberOfValidatedInstructions++;
+                    args.ProgramState.HasConstraint(args.ProgramState.GetSymbolValue(sSymbol), ObjectConstraint.NotNull).Should().BeTrue();
+                }
+            };
+
+            context.Walk();
+
+            numberOfValidatedInstructions.Should().Be(1);
+        }
+
+        [TestMethod]
+        [TestCategory("Symbolic execution")]
+        public void ExplodedGraph_StaticLocalFunctions()
+        {
+            var testInput = @"static string Local(object o) {return o.ToString()} Local(null);";
+            var context = new ExplodedGraphContext(testInput);
+            var numberOfValidatedInstructions = 0;
+            context.EG.InstructionProcessed += (sender, args) =>
+            {
+                if (args.Instruction.ToString() == "o.ToString()")
+                {
+                    numberOfValidatedInstructions++;
+                }
+            };
+
+            context.Walk();
+
+            numberOfValidatedInstructions.Should().Be(0);   // Local functions are not supported by CFG (yet)
+        }
+
+        private class ExplodedGraphContext
+        {
+            public readonly SemanticModel SemanticModel;
+            public readonly MethodDeclarationSyntax MainMethod;
+            public readonly IMethodSymbol MainMethodSymbol;
+            public readonly AbstractLiveVariableAnalysis LVA;
+            public readonly IControlFlowGraph CFG;
+            public readonly CSharpExplodedGraph EG;
+
+            public bool ExplorationEnded;
+            public bool MaxStepCountReached;
+            public int NumberOfExitBlockReached;
+
+            public ExplodedGraphContext(string methodBody)
+                : this(ControlFlowGraphTest.CompileWithMethodBody(string.Format(TestInput, methodBody), "Main", out var semanticModel), semanticModel)
+            { }
+
+            public ExplodedGraphContext((SyntaxTree tree, SemanticModel semanticModel) compilation)
+                : this(compilation.tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "Main"), compilation.semanticModel)
+            { }
+
+            public ExplodedGraphContext(SyntaxTree tree, SemanticModel semanticModel)
+                : this(tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "Main"), semanticModel)
+            {}
+
+            private ExplodedGraphContext(MethodDeclarationSyntax mainMethod, SemanticModel semanticModel)
+            {
+                this.MainMethod = mainMethod;
+                this.SemanticModel = semanticModel;
+                this.MainMethodSymbol = semanticModel.GetDeclaredSymbol(this.MainMethod) as IMethodSymbol;
+                this.CFG = CSharpControlFlowGraph.Create(this.MainMethod.Body, semanticModel);
+                this.LVA = CSharpLiveVariableAnalysis.Analyze(this.CFG, this.MainMethodSymbol, semanticModel);
+                this.EG = new CSharpExplodedGraph(this.CFG, this.MainMethodSymbol, semanticModel, this.LVA);
+                this.EG.ExplorationEnded += (sender, args) => { this.ExplorationEnded = true; };
+                this.EG.MaxStepCountReached += (sender, args) => { this.MaxStepCountReached = true; };
+                this.EG.ExitBlockReached += (sender, args) => { this.NumberOfExitBlockReached++; };
+            }
+
+            public void Walk()
+            {
+                this.EG.Walk();
+                this.ExplorationEnded.Should().Be(true);
+                this.NumberOfExitBlockReached.Should().Be(1);
+                this.MaxStepCountReached.Should().Be(false);
+            }
+        }
+
     }
 }

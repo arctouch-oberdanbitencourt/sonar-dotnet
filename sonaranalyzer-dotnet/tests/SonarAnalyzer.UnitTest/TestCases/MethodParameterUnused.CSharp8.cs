@@ -29,13 +29,13 @@
         public int DoSomething(int a)   // Compliant
         {
             static int LocalFunction(int x, int seed) => x + seed;
-            static int BadIncA(int x, int seed) => x + 1;   //Noncompliant
-            static int BadIncB(int x, int seed)             //Noncompliant
+            static int BadIncA(int x, int seed) => x + 1;   // FN, CFG does not support local functions
+            static int BadIncB(int x, int seed)             // FN, CFG does not support local functions
             {
                 seed = 1;
                 return x + seed;
             }
-            static int BadIncRecursive(int x, int seed)     //Noncompliant
+            static int BadIncRecursive(int x, int seed)     // FN, CFG does not support local functions
             {
                 seed = 1;
                 if (x > 1)
